@@ -1,0 +1,76 @@
+name: Windows VST3 Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-vst3:
+    name: Windows x64 Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Interface Character
+        uses: actions/checkout@v4
+
+      - name: Checkout Steinberg VST3 SDK
+        uses: actions/checkout@v4
+        with:
+          repository: steinbergmedia/vst3sdk
+          path: vst3sdk
+          submodules: recursive
+
+      - name: Configure DSP tests
+        shell: pwsh
+        run: cmake -S . -B build-core -A x64
+
+      - name: Build DSP tests
+        shell: pwsh
+        run: cmake --build build-core --config Release --target interface_character_tests
+
+      - name: Run DSP tests
+        shell: pwsh
+        run: ctest --test-dir build-core -C Release --output-on-failure
+
+      - name: Configure VST3
+        shell: pwsh
+        run: |
+          $sdkPath = Join-Path $env:GITHUB_WORKSPACE "vst3sdk"
+          cmake -S . -B build-vst3 -A x64 `
+            -DBUILD_VST3_ADAPTER=ON `
+            "-DVST3_SDK_DIR=$sdkPath" `
+            -DSMTG_CREATE_PLUGIN_LINK=OFF
+
+      - name: Build VST3 Release
+        shell: pwsh
+        run: cmake --build build-vst3 --config Release --target interface_character
+
+      - name: Collect VST3 bundle
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem -Path "build-vst3" -Directory -Filter "*.vst3" -Recurse |
+            Select-Object -First 1
+          if (-not $bundle) {
+            throw "No VST3 bundle was produced."
+          }
+
+          New-Item -ItemType Directory -Force -Path "artifact" | Out-Null
+          Copy-Item -Path $bundle.FullName -Destination "artifact/InterfaceCharacter.vst3" -Recurse
+          Compress-Archive -Path "artifact/InterfaceCharacter.vst3" `
+            -DestinationPath "artifact/InterfaceCharacter-VST3-Windows-x64.zip"
+
+      - name: Upload Windows VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: InterfaceCharacter-VST3-Windows-x64
+          path: |
+            artifact/InterfaceCharacter.vst3
+            artifact/InterfaceCharacter-VST3-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
