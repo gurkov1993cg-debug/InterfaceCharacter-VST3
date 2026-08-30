@@ -9,6 +9,9 @@ namespace interface_character {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
+constexpr float kLyraLfMinus3Hz = 0.85f;
+constexpr float kLyraNoiseRms = 1.7782794e-6f; // -115 dBFS RMS
+constexpr float kLyraTpdfScale = 2.44948974f; // sqrt(6), unit TPDF -> requested RMS
 
 constexpr std::array<ProfileSpec, 4> kProfiles{{
     {
@@ -35,9 +38,15 @@ constexpr std::array<ProfileSpec, 4> kProfiles{{
     {
         ProfileId::PrismSoundLyra1,
         "Prism Sound Lyra 1",
-        "Reference/transparent Prism converter starting profile",
+        "Lyra 1 line-output/DAC spec model; published limits plus conservative harmonic allocation",
         0.00f, 0.00f, 80.0f, 18000.0f,
-        0.001f, 0.000f, 0.0002f, 0.000f, 0.005f, 0.00002f, 0, 18.0f
+        // Published output THD is -107 dB at -0.1 dBFS. Prism does not
+        // publish the harmonic split, so the tiny H2/H3 allocation below is
+        // deliberately conservative and replaceable when a real unit is measured.
+        0.0f, 2.0e-6f, -1.78e-5f, 0.0f, 0.0f,
+        // -135 dB at 1 kHz, converted to linear voltage ratio.
+        1.7782794e-7f,
+        0, 0.0f
     },
 }};
 
@@ -58,6 +67,33 @@ float safeAlpha(float frequency, double sampleRate) noexcept
     return 1.0f - std::exp(-2.0f * kPi * hz / sr);
 }
 
+float lyraHfMinus3Hz(double sampleRate) noexcept
+{
+    const float sr = static_cast<float>(std::max(1000.0, sampleRate));
+
+    // Prism publishes -3 dB points for 44.1/48/96/192 kHz. Standard
+    // intermediate rates are scaled within the corresponding converter family.
+    float cutoff = 0.0f;
+    if (sr <= 50000.0f) {
+        const float t = std::clamp((sr - 44100.0f) / (48000.0f - 44100.0f), 0.0f, 1.0f);
+        cutoff = 22000.0f + t * (23900.0f - 22000.0f);
+    } else if (sr <= 110000.0f) {
+        cutoff = sr * (47800.0f / 96000.0f);
+    } else {
+        cutoff = sr * (76000.0f / 192000.0f);
+    }
+
+    return std::clamp(cutoff, 100.0f, sr * 0.499f);
+}
+
+float nextUniform01(std::uint32_t& state) noexcept
+{
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return static_cast<float>(state >> 8) * (1.0f / 16777216.0f);
+}
+
 } // namespace
 
 const ProfileSpec& getProfileSpec(ProfileId id) noexcept
@@ -66,7 +102,7 @@ const ProfileSpec& getProfileSpec(ProfileId id) noexcept
         if (profile.id == id)
             return profile;
     }
-    return kProfiles.front();
+    return kProfiles.back();
 }
 
 CharacterProcessor::CharacterProcessor()
@@ -81,6 +117,7 @@ void CharacterProcessor::prepare(double sampleRate) noexcept
     toneLowAlpha_ = safeAlpha(spec.lowShelfHz, sampleRate_);
     toneHighAlpha_ = safeAlpha(spec.highShelfHz, sampleRate_);
     dcAlpha_ = safeAlpha(5.0f, sampleRate_);
+    updateLyraFilterCoefficients();
     reset();
 }
 
@@ -88,6 +125,8 @@ void CharacterProcessor::reset() noexcept
 {
     left_ = {};
     right_ = {};
+    left_.rngState = 0x6d2b79f5u;
+    right_.rngState = 0x1b56c4e9u;
 }
 
 void CharacterProcessor::setParameters(const Parameters& parameters) noexcept
@@ -98,11 +137,39 @@ void CharacterProcessor::setParameters(const Parameters& parameters) noexcept
     toneHighAlpha_ = safeAlpha(spec.highShelfHz, sampleRate_);
 }
 
+void CharacterProcessor::updateLyraFilterCoefficients() noexcept
+{
+    const float sr = static_cast<float>(sampleRate_);
+
+    // First-order bilinear high-pass. fc=0.85 Hz gives about -0.049 dB at
+    // 8 Hz and -3 dB below 1 Hz, matching Lyra's published LF limits closely.
+    const float hpK = std::tan(kPi * kLyraLfMinus3Hz / sr);
+    const float hpNorm = 1.0f / (1.0f + hpK);
+    lyraHpB0_ = hpNorm;
+    lyraHpB1_ = -hpNorm;
+    lyraHpFeedback_ = (1.0f - hpK) * hpNorm;
+
+    // 2nd-order Butterworth low-pass placed at Prism's published -3 dB point.
+    // This primarily models the converter/reconstruction roll-off and its
+    // associated phase rotation without inventing an audible EQ curve.
+    const float cutoff = lyraHfMinus3Hz(sampleRate_);
+    const float omega = 2.0f * kPi * cutoff / sr;
+    const float sine = std::sin(omega);
+    const float cosine = std::cos(omega);
+    constexpr float q = 0.7071067811865475f;
+    const float alpha = sine / (2.0f * q);
+    const float a0 = 1.0f + alpha;
+
+    lyraLpB0_ = ((1.0f - cosine) * 0.5f) / a0;
+    lyraLpB1_ = (1.0f - cosine) / a0;
+    lyraLpB2_ = lyraLpB0_;
+    lyraLpA1_ = (-2.0f * cosine) / a0;
+    lyraLpA2_ = (1.0f - alpha) / a0;
+}
+
 float CharacterProcessor::applyTone(float input, ChannelState& state,
                                     const ProfileSpec& spec) const noexcept
 {
-    // One-pole low/high shelves are sufficient for the first profiling pass.
-    // They will later be replaced by measured minimum-phase curves.
     state.lowState += toneLowAlpha_ * (input - state.lowState);
     float output = input + (dbToGain(spec.lowShelfDb) - 1.0f) * state.lowState;
 
@@ -128,17 +195,69 @@ float CharacterProcessor::quantizeIfNeeded(float input,
     return std::round(input * scale) / scale;
 }
 
+float CharacterProcessor::processLyraHighPass(float input, ChannelState& state) const noexcept
+{
+    const float output = lyraHpB0_ * input + lyraHpB1_ * state.lyraHpX1
+                       + lyraHpFeedback_ * state.lyraHpY1;
+    state.lyraHpX1 = input;
+    state.lyraHpY1 = output;
+    return output;
+}
+
+float CharacterProcessor::processLyraLowPass(float input, ChannelState& state) const noexcept
+{
+    const float output = lyraLpB0_ * input + state.lyraLpZ1;
+    state.lyraLpZ1 = lyraLpB1_ * input - lyraLpA1_ * output + state.lyraLpZ2;
+    state.lyraLpZ2 = lyraLpB2_ * input - lyraLpA2_ * output;
+    return output;
+}
+
+float CharacterProcessor::nextLyraNoise(ChannelState& state) const noexcept
+{
+    const float tpdf = nextUniform01(state.rngState)
+                     + nextUniform01(state.rngState) - 1.0f;
+    return tpdf * (kLyraNoiseRms * kLyraTpdfScale);
+}
+
+float CharacterProcessor::processLyraSample(float input, ChannelState& state,
+                                            const ProfileSpec& spec) noexcept
+{
+    const float amount = clamp01(parameters_.amount);
+    const float driveGain = dbToGain(parameters_.driveDb);
+    const float driven = input * driveGain;
+
+    // No generic saturation is added. The polynomial is calibrated so that
+    // near full scale the model lands around Prism's published -107 dB THD.
+    // Exact H2/H3 phase and distribution remain measurement-dependent.
+    float signal = input;
+    signal += amount * (spec.secondHarmonic * driven * driven
+                      + spec.thirdHarmonic * driven * driven * driven);
+
+    // Published dynamic range is 115 dB. TPDF is used only as a neutral
+    // placeholder spectrum until a real Lyra's residual-noise FFT is captured.
+    signal += amount * nextLyraNoise(state);
+
+    // The output-stage bandwidth is stateful, so this models amplitude and
+    // phase behavior instead of acting as a static EQ curve.
+    signal = processLyraHighPass(signal, state);
+    signal = processLyraLowPass(signal, state);
+
+    const float wet = clamp01(parameters_.mix);
+    const float outputGain = dbToGain(parameters_.outputDb);
+    return (input + wet * (signal - input)) * outputGain;
+}
+
 float CharacterProcessor::processSample(float input, ChannelState& state,
                                         const ProfileSpec& spec) noexcept
 {
+    if (spec.id == ProfileId::PrismSoundLyra1)
+        return processLyraSample(input, state, spec);
+
     const float amount = clamp01(parameters_.amount);
     const float driveGain = dbToGain(parameters_.driveDb);
 
     float signal = applyTone(input, state, spec);
 
-    // A slowly changing envelope gives the nonlinear stage a small amount of
-    // memory.  This prevents the prototype from behaving like a static EQ
-    // followed by a generic waveshaper.
     const float envelopeTarget = std::abs(signal);
     const float envelopeAlpha = safeAlpha(12.0f, sampleRate_);
     state.envelope += envelopeAlpha * (envelopeTarget - state.envelope);
@@ -151,8 +270,6 @@ float CharacterProcessor::processSample(float input, ChannelState& state,
 
     float shaped = signal + amount * spec.saturation * (normalized - signal);
 
-    // Even harmonics model asymmetry.  The DC blocker below removes the
-    // static offset while retaining the audible level-dependent movement.
     const float nonlinearInput = signal * driveGain;
     shaped += amount * (spec.secondHarmonic * nonlinearInput * nonlinearInput
                       + spec.thirdHarmonic * nonlinearInput * nonlinearInput
@@ -160,9 +277,8 @@ float CharacterProcessor::processSample(float input, ChannelState& state,
     shaped = dcBlock(shaped, state);
 
     const float clipThreshold = dbToGain(spec.clipThresholdDb);
-    if (clipThreshold > 0.0f && std::abs(shaped) > clipThreshold) {
+    if (clipThreshold > 0.0f && std::abs(shaped) > clipThreshold)
         shaped = clipThreshold * std::tanh(shaped / clipThreshold);
-    }
 
     shaped = quantizeIfNeeded(shaped, spec);
     state.previousInput = signal;
@@ -177,7 +293,6 @@ void CharacterProcessor::processMono(float* samples,
 {
     if (samples == nullptr || numSamples == 0)
         return;
-
     if (parameters_.bypass || parameters_.mix <= 0.0f)
         return;
 
@@ -191,12 +306,10 @@ void CharacterProcessor::processStereo(float* left, float* right,
 {
     if (left == nullptr || numSamples == 0)
         return;
-
     if (right == nullptr) {
         processMono(left, numSamples);
         return;
     }
-
     if (parameters_.bypass || parameters_.mix <= 0.0f)
         return;
 
@@ -216,7 +329,6 @@ void CharacterProcessor::processMono(double* samples,
 {
     if (samples == nullptr || numSamples == 0)
         return;
-
     if (parameters_.bypass || parameters_.mix <= 0.0f)
         return;
 
@@ -230,12 +342,10 @@ void CharacterProcessor::processStereo(double* left, double* right,
 {
     if (left == nullptr || numSamples == 0)
         return;
-
     if (right == nullptr) {
         processMono(left, numSamples);
         return;
     }
-
     if (parameters_.bypass || parameters_.mix <= 0.0f)
         return;
 

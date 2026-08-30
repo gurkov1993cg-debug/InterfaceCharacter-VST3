@@ -1,5 +1,6 @@
 #include "CharacterProcessor.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
@@ -9,8 +10,11 @@
 using interface_character::CharacterProcessor;
 using interface_character::Parameters;
 using interface_character::ProfileId;
+using interface_character::getProfileSpec;
 
 namespace {
+
+constexpr float pi = 3.14159265358979323846f;
 
 bool finiteBuffer(const std::vector<float>& buffer)
 {
@@ -30,14 +34,34 @@ float maxDifference(const std::vector<float>& a, const std::vector<float>& b)
     return result;
 }
 
-std::vector<float> makeSine(float frequency, float sampleRate, std::size_t count)
+std::vector<float> makeSine(float frequency, float sampleRate, std::size_t count,
+                            float amplitude = 0.5f)
 {
-    constexpr float pi = 3.14159265358979323846f;
     std::vector<float> result(count);
     for (std::size_t i = 0; i < count; ++i)
-        result[i] = 0.5f * std::sin(2.0f * pi * frequency
-                                    * static_cast<float>(i) / sampleRate);
+        result[i] = amplitude * std::sin(2.0f * pi * frequency
+                                        * static_cast<float>(i) / sampleRate);
     return result;
+}
+
+float rms(const std::vector<float>& data, std::size_t begin = 0)
+{
+    double sum = 0.0;
+    for (std::size_t i = begin; i < data.size(); ++i)
+        sum += static_cast<double>(data[i]) * static_cast<double>(data[i]);
+    const auto count = data.size() - begin;
+    return static_cast<float>(std::sqrt(sum / static_cast<double>(count)));
+}
+
+float gainDb(float output, float input)
+{
+    return 20.0f * std::log10(output / input);
+}
+
+void testLyraIsDefault()
+{
+    Parameters parameters;
+    assert(parameters.profile == ProfileId::PrismSoundLyra1);
 }
 
 void testBypassAndMix()
@@ -81,20 +105,90 @@ void testAllProfilesAreFinite()
     }
 }
 
-void testApolloProfileAddsAControlledDifference()
+void testLyraLfPublishedPoint()
 {
-    auto input = makeSine(220.0f, 48000.0f, 4096);
+    constexpr float sr = 48000.0f;
+    auto input = makeSine(8.0f, sr, static_cast<std::size_t>(sr * 6.0f), 0.25f);
+    auto output = input;
+
+    CharacterProcessor processor;
+    processor.prepare(sr);
+    Parameters parameters;
+    parameters.amount = 0.0f; // isolate bandwidth/phase model
+    processor.setParameters(parameters);
+    processor.processMono(output.data(), output.size());
+
+    const std::size_t begin = static_cast<std::size_t>(sr * 3.0f);
+    const float db = gainDb(rms(output, begin), rms(input, begin));
+    assert(db > -0.07f && db < -0.03f);
+}
+
+void testLyraHfMinus3Point48k()
+{
+    constexpr float sr = 48000.0f;
+    auto input = makeSine(23900.0f, sr, static_cast<std::size_t>(sr), 0.25f);
+    auto output = input;
+
+    CharacterProcessor processor;
+    processor.prepare(sr);
+    Parameters parameters;
+    parameters.amount = 0.0f;
+    processor.setParameters(parameters);
+    processor.processMono(output.data(), output.size());
+
+    const std::size_t begin = 4096;
+    const float db = gainDb(rms(output, begin), rms(input, begin));
+    assert(db > -3.2f && db < -2.8f);
+}
+
+void testLyraNoiseFloor()
+{
+    constexpr float sr = 48000.0f;
+    std::vector<float> silence(static_cast<std::size_t>(sr * 2.0f), 0.0f);
+
+    CharacterProcessor processor;
+    processor.prepare(sr);
+    Parameters parameters;
+    parameters.amount = 1.0f;
+    processor.setParameters(parameters);
+    processor.processMono(silence.data(), silence.size());
+
+    const float noiseDb = 20.0f * std::log10(rms(silence, 4096));
+    assert(noiseDb > -117.0f && noiseDb < -113.0f);
+}
+
+void testLyraCrosstalkAt1k()
+{
+    constexpr float sr = 48000.0f;
+    auto left = makeSine(1000.0f, sr, static_cast<std::size_t>(sr), 0.5f);
+    std::vector<float> right(left.size(), 0.0f);
+
+    CharacterProcessor processor;
+    processor.prepare(sr);
+    Parameters parameters;
+    parameters.amount = 0.0f; // no noise, isolate crosstalk
+    processor.setParameters(parameters);
+    processor.processStereo(left.data(), right.data(), left.size());
+
+    const float ratio = rms(right, 4096) / rms(left, 4096);
+    const float db = 20.0f * std::log10(ratio);
+    assert(db > -136.0f && db < -134.0f);
+}
+
+void testLyraAddsOnlyTinyMidbandDifference()
+{
+    auto input = makeSine(1000.0f, 48000.0f, 8192, 0.9f);
     const auto original = input;
 
     CharacterProcessor processor;
     processor.prepare(48000.0);
     Parameters parameters;
-    parameters.profile = ProfileId::UniversalAudioApollo;
-    parameters.driveDb = 12.0f;
+    parameters.profile = ProfileId::PrismSoundLyra1;
     processor.setParameters(parameters);
     processor.processMono(input.data(), input.size());
 
-    assert(maxDifference(input, original) > 1.0e-5f);
+    assert(maxDifference(input, original) > 1.0e-7f);
+    assert(maxDifference(input, original) < 2.0e-3f);
     assert(finiteBuffer(input));
 }
 
@@ -102,9 +196,14 @@ void testApolloProfileAddsAControlledDifference()
 
 int main()
 {
+    testLyraIsDefault();
     testBypassAndMix();
     testAllProfilesAreFinite();
-    testApolloProfileAddsAControlledDifference();
-    std::cout << "Interface Character DSP tests passed\n";
+    testLyraLfPublishedPoint();
+    testLyraHfMinus3Point48k();
+    testLyraNoiseFloor();
+    testLyraCrosstalkAt1k();
+    testLyraAddsOnlyTinyMidbandDifference();
+    std::cout << "Interface Character / Prism Lyra 1 DSP tests passed\n";
     return 0;
 }

@@ -26,6 +26,17 @@ float normalizedToOutput(ParamValue value) noexcept
     return static_cast<float>(-12.0 + std::clamp(value, 0.0, 1.0) * 24.0);
 }
 
+ProfileId profileFromUiIndex(int index) noexcept
+{
+    switch (std::clamp(index, 0, 3)) {
+        case 0: return ProfileId::PrismSoundLyra1;
+        case 1: return ProfileId::UniversalAudioApollo;
+        case 2: return ProfileId::ProToolsTdm88824;
+        case 3: return ProfileId::ProToolsHdxHdIo;
+        default: return ProfileId::PrismSoundLyra1;
+    }
+}
+
 } // namespace
 
 using namespace Steinberg;
@@ -96,10 +107,12 @@ void InterfaceCharacterProcessor::readParameterChanges(IParameterChanges* change
             continue;
 
         switch (queue->getParameterId()) {
-            case kProfile:
-                parameters_.profile = static_cast<ProfileId>(std::clamp(
-                    static_cast<int>(std::lround(value * 3.0)), 0, 3));
+            case kProfile: {
+                const int uiIndex = std::clamp(
+                    static_cast<int>(std::lround(value * 3.0)), 0, 3);
+                parameters_.profile = profileFromUiIndex(uiIndex);
                 break;
+            }
             case kDrive:
                 parameters_.driveDb = normalizedToDrive(value);
                 break;
@@ -191,6 +204,8 @@ tresult PLUGIN_API InterfaceCharacterProcessor::setState(IBStream* state)
         return kResultFalse;
     }
 
+    // State stores the stable ProfileId, not the UI list index, preserving
+    // compatibility with the previous prototype's saved states.
     parameters_.profile = static_cast<ProfileId>(std::clamp(profile, 0, 3));
     parameters_.amount = std::clamp(parameters_.amount, 0.0f, 1.0f);
     parameters_.mix = std::clamp(parameters_.mix, 0.0f, 1.0f);

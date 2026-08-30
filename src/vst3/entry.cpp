@@ -4,7 +4,7 @@
 
 #include "public.sdk/source/main/pluginfactory.h"
 
-#define STRING_PLUGIN_NAME "Interface Character"
+#define STRING_PLUGIN_NAME "Interface Character - Lyra 1"
 #define STRING_COMPANY_NAME "Interface Character Lab"
 #define STRING_COMPANY_URL ""
 #define STRING_COMPANY_EMAIL ""
@@ -21,7 +21,7 @@ BEGIN_FACTORY_DEF(STRING_COMPANY_NAME, STRING_COMPANY_URL, STRING_COMPANY_EMAIL)
                STRING_PLUGIN_NAME,
                Vst::kDistributable,
                "Fx",
-               "0.1.0",
+               "0.2.0",
                kVstVersionString,
                InterfaceCharacterProcessor::createInstance)
 
@@ -31,7 +31,7 @@ BEGIN_FACTORY_DEF(STRING_COMPANY_NAME, STRING_COMPANY_URL, STRING_COMPANY_EMAIL)
                STRING_PLUGIN_NAME " Controller",
                0,
                "",
-               "0.1.0",
+               "0.2.0",
                kVstVersionString,
                InterfaceCharacterController::createInstance)
 

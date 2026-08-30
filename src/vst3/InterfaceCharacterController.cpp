@@ -15,15 +15,29 @@ namespace {
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
+
+int profileIdToUiIndex(int profile) noexcept
+{
+    switch (std::clamp(profile, 0, 3)) {
+        case 3: return 0; // Prism Sound Lyra 1
+        case 0: return 1; // Universal Audio Apollo
+        case 1: return 2; // Pro Tools TDM / 888|24
+        case 2: return 3; // Pro Tools HDX / HD I/O
+        default: return 0;
+    }
+}
+
 class ProfileParameter final : public StringListParameter {
 public:
     ProfileParameter()
-    : StringListParameter(STR16("Profile"), kProfile)
+    : StringListParameter(STR16("Model"), kProfile)
     {
-        appendString(STR16("Universal Audio Apollo"));
-        appendString(STR16("Pro Tools TDM / 888|24"));
-        appendString(STR16("Pro Tools HDX / HD I/O"));
+        // Lyra 1 is intentionally first so a fresh plug-in instance starts
+        // on the only profile currently promoted beyond prototype status.
         appendString(STR16("Prism Sound Lyra 1"));
+        appendString(STR16("Universal Audio Apollo (prototype)"));
+        appendString(STR16("Pro Tools TDM / 888|24 (prototype)"));
+        appendString(STR16("Pro Tools HDX / HD I/O (prototype)"));
     }
 };
 
@@ -78,7 +92,8 @@ tresult PLUGIN_API InterfaceCharacterController::setComponentState(IBStream* sta
         return kResultFalse;
     }
 
-    setParamNormalized(kProfile, std::clamp(static_cast<ParamValue>(profile) / 3.0, 0.0, 1.0));
+    const int uiProfile = profileIdToUiIndex(profile);
+    setParamNormalized(kProfile, static_cast<ParamValue>(uiProfile) / 3.0);
     setParamNormalized(kDrive, std::clamp((static_cast<ParamValue>(driveDb) + 12.0) / 30.0,
                                           0.0, 1.0));
     setParamNormalized(kAmount, std::clamp(static_cast<ParamValue>(amount), 0.0, 1.0));

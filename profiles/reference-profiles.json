@@ -1,31 +1,54 @@
 {
-  "schema": 1,
-  "status": "engineering-starting-points",
-  "warning": "These values are not measurements of any manufacturer's hardware. Replace them with loopback-derived values before claiming an exact emulation.",
+  "schema": 2,
+  "status": "lyra-1-published-spec-model",
+  "warning": "The Lyra 1 model uses Prism Sound's published analogue-output specifications. The manufacturer does not publish harmonic phase/distribution or residual-noise spectrum, so those two details remain conservative engineering assumptions until a real unit is measured.",
+  "active_target": "prism_lyra_1",
   "profiles": [
+    {
+      "id": "prism_lyra_1",
+      "target": "Prism Sound Lyra 1",
+      "role": "analogue line-output / DAC signal signature",
+      "status": "published-spec-based",
+      "published_output_spec": {
+        "full_scale_dbu": 18.0,
+        "output_impedance_balanced_ohm": 100,
+        "thd_db_at_minus_0_1_dbfs": -107.0,
+        "thdn_db_at_minus_0_1_dbfs": -106.0,
+        "dynamic_range_db": 115.0,
+        "lf_minus_0_05_db_hz": 8.0,
+        "lf_minus_3_db_hz": "<1",
+        "crosstalk_db_at_1khz": -135.0,
+        "crosstalk_db_20hz_20khz": "<-120",
+        "hf_minus_3_db_hz": {
+          "44100": 22000,
+          "48000": 23900,
+          "96000": 47800,
+          "192000": 76000
+        }
+      },
+      "model_assumptions": {
+        "lf_minus_3_db_hz": 0.85,
+        "noise_floor_dbfs_rms": -115.0,
+        "harmonic_split": "H3-dominant conservative allocation constrained to approximately -107 dB total THD near full scale",
+        "crosstalk_1khz_linear": 1.7782794e-7
+      },
+      "source": "https://www.prismsound.com/music_recording/products_subs/lyra/online_manual/specifications.htm",
+      "unit_measurement_required_for_exact_clone": true
+    },
     {
       "id": "uad_apollo",
       "target": "Universal Audio Apollo/UAD-style",
-      "role": "analog front-end and UAD/Console-style color",
-      "calibration_required": true
+      "status": "prototype-not-current-focus"
     },
     {
       "id": "pro_tools_tdm_88824",
       "target": "Legacy Pro Tools TDM with 888|24 reference",
-      "role": "fixed-point headroom, rounding and overload behavior",
-      "calibration_required": true
+      "status": "prototype-not-current-focus"
     },
     {
       "id": "pro_tools_hdx_hd_io",
       "target": "Pro Tools HDX with HD I/O reference",
-      "role": "high-headroom digital path and converter response",
-      "calibration_required": true
-    },
-    {
-      "id": "prism_lyra_1",
-      "target": "Prism Sound Lyra 1",
-      "role": "reference-transparent AD/DA path",
-      "calibration_required": true
+      "status": "prototype-not-current-focus"
     }
   ]
 }

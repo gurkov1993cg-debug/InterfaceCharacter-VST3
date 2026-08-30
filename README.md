@@ -1,31 +1,23 @@
-# Interface Character VST3
+# Interface Character - Lyra 1
 
-Това е първият самостоятелен DSP прототип за VST3 плъгин, който ще има
-избираеми профили за:
+Current development is focused on **Prism Sound Lyra 1** first. The VST3 now starts on Lyra 1 by default; the older Apollo/TDM/HDX entries remain only as prototype placeholders and are not the current modelling target.
 
-- Universal Audio Apollo/UAD;
-- Pro Tools TDM с референтен 888|24 път;
-- Pro Tools HDX с референтен HD I/O път;
-- Prism Sound Lyra 1.
+## Lyra 1 DSP in this version
 
-## Какво има в тази версия
+The Lyra path models the published analogue line-output/DAC behaviour rather than applying a simple EQ curve:
 
-`src/CharacterProcessor.*` съдържа реалновременния DSP core. Той включва:
+- stateful LF response: approximately -0.05 dB at 8 Hz and -3 dB below 1 Hz;
+- sample-rate-dependent reconstruction roll-off using the published -3 dB points for 44.1/48/96/192 kHz;
+- very small level-dependent H2/H3 nonlinearity constrained to the published -107 dB THD magnitude near full scale;
+- approximately -115 dBFS RMS residual noise;
+- -135 dB stereo crosstalk at 1 kHz;
+- phase behaviour produced by the actual stateful filter stages, not a static magnitude-only EQ.
 
-- измеримо-заменяеми low/high tone криви;
-- level-dependent nonlinear stage;
-- втори и трети хармоник;
-- малко memory поведение;
-- TDM-style 24-bit quantization режим;
-- stereo crosstalk;
-- mix, drive, output и bypass параметри.
+Prism Sound's published Lyra analogue-output specification is the engineering reference for these limits. The exact harmonic distribution and residual-noise spectrum are not published, so those remain conservative assumptions until a physical Lyra 1 is measured.
 
-Параметрите в първия прототип са консервативни стартови стойности. Те не са
-представени като точни измервания на Universal Audio, Avid или Prism Sound.
+Reference: https://www.prismsound.com/music_recording/products_subs/lyra/online_manual/specifications.htm
 
-## Компилация на DSP тестовете
-
-С наличния компилатор може да се изпълни:
+## DSP tests
 
 ```bash
 g++ -std=c++17 -Wall -Wextra -Wpedantic \
@@ -34,38 +26,12 @@ g++ -std=c++17 -Wall -Wextra -Wpedantic \
 ./build/interface_character_tests
 ```
 
-За пълния VST3 binary е необходим официалният Steinberg VST3 SDK и Windows
-x64 build. Адаптерът вече е в `src/vst3/` и извиква същия DSP core; няма
-отделна DSP логика за Cubase. При наличие на Visual Studio 2022 и SDK може да
-се използва:
+The tests verify bypass behaviour, finite output, the Lyra LF anchor, the 48 kHz HF -3 dB anchor, residual-noise level, 1 kHz crosstalk, and the intentionally tiny mid-band difference.
 
-```powershell
-cmake -S . -B build-vst3 -A x64 `
-  -DBUILD_VST3_ADAPTER=ON `
-  -DVST3_SDK_DIR="C:/src/vst3sdk"
-cmake --build build-vst3 --config Release
-```
+## VST3 build
 
-SDK-то се изтегля рекурсивно от официалното хранилище на Steinberg. Не го
-включвам в source архива, за да остане проектът малък и да се спазят неговите
-лицензионни условия.
+The existing GitHub Actions Windows x64 workflow builds the plug-in against the official Steinberg VST3 SDK and packages the resulting `.vst3` bundle.
 
-## Измервателен етап
+## Accuracy boundary
 
-За реална прилика ще се запишат loopback тестове през конкретните устройства
-при еднакви sample rate и calibration:
-
-1. sweep за честотната и фазовата характеристика;
-2. 1 kHz и multitone при -36, -18, -6, -1 и 0 dBFS;
-3. THD/хармоници спрямо ниво и честота;
-4. stereo crosstalk и noise floor;
-5. overload recovery и latency.
-
-След това стартовите стойности се заменят с измерени профили и се проверяват с
-AB/null test.
-
-## Важно разграничение
-
-TDM и HDX са цифрови системи, а Prism Lyra е конверторен хардуер. Един VST3
-плъгин може да моделира техния измерим сигнален отпечатък, но не може да стане
-реалният физически ADC/DAC или clock на устройството.
+A VST3 can reproduce the measurable signal-domain signature of the Lyra output path, but it cannot become the physical Lyra DAC, analogue output driver, power supply, or clock. A true clone still requires loopback captures from a real unit for harmonic phase/distribution, noise spectrum, overload recovery and unit-specific tolerances.
