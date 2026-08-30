@@ -1,0 +1,131 @@
+name: Apply Prism Lyra 1 Model
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-prism-lyra1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-build:
+    name: Apply, test and build Lyra 1 VST3
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Interface Character
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Locate Lyra update ZIP
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:GITHUB_WORKSPACE '.github/workflows/Prism-Lyra1-Model-update.zip'
+          if (-not (Test-Path $zip)) {
+            throw "Prism-Lyra1-Model-update.zip was not found at .github/workflows/."
+          }
+          "LYRA_ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Expand and overlay Lyra 1 model
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'lyra1-update'
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Expand-Archive -Path $env:LYRA_ZIP -DestinationPath $stage -Force
+
+          $required = @(
+            'src/CharacterProcessor.cpp',
+            'src/CharacterProcessor.hpp',
+            'src/Profile.hpp',
+            'src/vst3/InterfaceCharacterController.cpp',
+            'src/vst3/InterfaceCharacterProcessor.cpp',
+            'src/vst3/entry.cpp',
+            'tests/test_character.cpp',
+            'profiles/reference-profiles.json',
+            'README.md',
+            'docs/lyra1-model.md'
+          )
+
+          foreach ($rel in $required) {
+            $src = Join-Path $stage $rel
+            if (-not (Test-Path $src)) { throw "Missing update file: $rel" }
+            $dst = Join-Path $env:GITHUB_WORKSPACE $rel
+            $dir = Split-Path $dst -Parent
+            if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+            Copy-Item $src $dst -Force
+          }
+
+      - name: Configure DSP tests
+        shell: pwsh
+        run: cmake -S . -B build-core -A x64
+
+      - name: Build DSP tests
+        shell: pwsh
+        run: cmake --build build-core --config Release --target interface_character_tests
+
+      - name: Run DSP tests
+        shell: pwsh
+        run: ctest --test-dir build-core -C Release --output-on-failure
+
+      - name: Checkout Steinberg VST3 SDK
+        uses: actions/checkout@v4
+        with:
+          repository: steinbergmedia/vst3sdk
+          path: vst3sdk
+          submodules: recursive
+
+      - name: Configure VST3
+        shell: pwsh
+        run: |
+          $sdkPath = Join-Path $env:GITHUB_WORKSPACE 'vst3sdk'
+          cmake -S . -B build-vst3 -A x64 `
+            -DBUILD_VST3_ADAPTER=ON `
+            "-DVST3_SDK_DIR=$sdkPath" `
+            -DSMTG_CREATE_PLUGIN_LINK=OFF
+
+      - name: Build VST3 Release
+        shell: pwsh
+        run: cmake --build build-vst3 --config Release --target interface_character
+
+      - name: Collect Lyra 1 VST3 bundle
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem -Path 'build-vst3' -Directory -Filter '*.vst3' -Recurse | Select-Object -First 1
+          if (-not $bundle) { throw 'No VST3 bundle was produced.' }
+
+          New-Item -ItemType Directory -Force -Path 'artifact' | Out-Null
+          Copy-Item -Path $bundle.FullName -Destination 'artifact/PrismLyra1Model.vst3' -Recurse
+          Compress-Archive -Path 'artifact/PrismLyra1Model.vst3' `
+            -DestinationPath 'artifact/Prism-Lyra1-Model-VST3-Windows-x64.zip' -Force
+
+      - name: Upload Windows VST3 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Prism-Lyra1-Model-VST3-Windows-x64
+          path: |
+            artifact/PrismLyra1Model.vst3
+            artifact/Prism-Lyra1-Model-VST3-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Commit verified Lyra 1 model to main
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          git add -- src tests profiles README.md docs/lyra1-model.md
+          git rm -f --ignore-unmatch '.github/workflows/Prism-Lyra1-Model-update.zip'
+
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host 'No source changes to commit.'
+            exit 0
+          }
+
+          git commit -m 'Add Prism Sound Lyra 1 DSP model'
+          git push origin HEAD:main
