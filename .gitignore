@@ -1,0 +1,12 @@
+build/
+build-core/
+build-vst3/
+artifact/
+third_party/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+*.pdb
+*.obj
+*.ilk
