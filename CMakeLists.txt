@@ -75,9 +75,4 @@ if (BUILD_VST3_ADAPTER)
     target_link_libraries(interface_character PRIVATE sdk)
     smtg_target_configure_version_file(interface_character)
 
-    if (WIN32)
-        set_target_properties(interface_character PROPERTIES
-            OUTPUT_NAME "InterfaceCharacter"
-        )
-    endif()
 endif()
