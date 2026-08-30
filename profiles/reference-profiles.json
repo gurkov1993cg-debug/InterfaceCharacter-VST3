@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "status": "engineering-starting-points",
+  "warning": "These values are not measurements of any manufacturer's hardware. Replace them with loopback-derived values before claiming an exact emulation.",
+  "profiles": [
+    {
+      "id": "uad_apollo",
+      "target": "Universal Audio Apollo/UAD-style",
+      "role": "analog front-end and UAD/Console-style color",
+      "calibration_required": true
+    },
+    {
+      "id": "pro_tools_tdm_88824",
+      "target": "Legacy Pro Tools TDM with 888|24 reference",
+      "role": "fixed-point headroom, rounding and overload behavior",
+      "calibration_required": true
+    },
+    {
+      "id": "pro_tools_hdx_hd_io",
+      "target": "Pro Tools HDX with HD I/O reference",
+      "role": "high-headroom digital path and converter response",
+      "calibration_required": true
+    },
+    {
+      "id": "prism_lyra_1",
+      "target": "Prism Sound Lyra 1",
+      "role": "reference-transparent AD/DA path",
+      "calibration_required": true
+    }
+  ]
+}
