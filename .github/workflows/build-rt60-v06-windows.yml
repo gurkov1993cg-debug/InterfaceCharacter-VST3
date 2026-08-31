@@ -1,0 +1,72 @@
+name: Build RT60 Room Decay Corrector v0.6 MEASURED WATERFALL Windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout build host
+        uses: actions/checkout@v4
+
+      - name: Locate v0.6 source ZIP
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path . -Filter "RT60-Room-Decay-Corrector-v0.6-source.zip" -Recurse | Select-Object -First 1
+          if (-not $zip) { throw "RT60-Room-Decay-Corrector-v0.6-source.zip not found." }
+          "RT60_ZIP=$($zip.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Expand source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path rt60-src | Out-Null
+          Expand-Archive -Path $env:RT60_ZIP -DestinationPath rt60-src -Force
+          $root = Get-ChildItem rt60-src -Directory | Select-Object -First 1
+          if (-not $root) { throw "Source root not found." }
+          "RT60_ROOT=$($root.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Configure core and waterfall tests
+        shell: pwsh
+        run: cmake -S "$env:RT60_ROOT" -B rt60-build-core -A x64
+
+      - name: Build core with warnings enabled
+        shell: pwsh
+        run: cmake --build rt60-build-core --config Release
+
+      - name: Run all core tests
+        shell: pwsh
+        run: ctest --test-dir rt60-build-core -C Release --output-on-failure
+
+      - name: Configure Standalone and VST3
+        shell: pwsh
+        run: cmake -S "$env:RT60_ROOT" -B rt60-build -A x64 -DRT60_BUILD_JUCE=ON
+
+      - name: Build Standalone and VST3
+        shell: pwsh
+        run: cmake --build rt60-build --config Release
+
+      - name: Collect Windows artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifact | Out-Null
+          $exe = Get-ChildItem rt60-build -Recurse -File -Filter "RT60 Room Decay Corrector.exe" | Select-Object -First 1
+          if (-not $exe) { throw "Standalone EXE not found." }
+          Copy-Item $exe.FullName artifact/
+          $vst = Get-ChildItem rt60-build -Recurse -Directory -Filter "*.vst3" | Select-Object -First 1
+          if (-not $vst) { throw "VST3 bundle not found." }
+          Copy-Item $vst.FullName artifact/ -Recurse
+          Compress-Archive -Path artifact/* -DestinationPath RT60-Room-Decay-Corrector-v0.6-Windows-x64.zip
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: RT60-Room-Decay-Corrector-v0.6-Windows-x64
+          path: RT60-Room-Decay-Corrector-v0.6-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30

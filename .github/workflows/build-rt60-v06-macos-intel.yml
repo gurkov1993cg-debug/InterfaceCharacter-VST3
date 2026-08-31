@@ -1,0 +1,70 @@
+name: Build RT60 Room Decay Corrector v0.6 MEASURED WATERFALL macOS Intel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    steps:
+      - name: Checkout build host
+        uses: actions/checkout@v4
+
+      - name: Locate v0.6 source ZIP
+        shell: bash
+        run: |
+          ZIP=$(find . -name 'RT60-Room-Decay-Corrector-v0.6-source.zip' -print -quit)
+          test -n "$ZIP" || { echo 'v0.6 source ZIP not found.' >&2; exit 1; }
+          echo "RT60_ZIP=$(cd "$(dirname "$ZIP")" && pwd)/$(basename "$ZIP")" >> "$GITHUB_ENV"
+
+      - name: Expand source
+        shell: bash
+        run: |
+          rm -rf rt60-src && mkdir -p rt60-src
+          unzip -q "$RT60_ZIP" -d rt60-src
+          ROOT=$(find rt60-src -mindepth 1 -maxdepth 1 -type d -print -quit)
+          test -n "$ROOT" || { echo 'Source root not found.' >&2; exit 1; }
+          echo "RT60_ROOT=$(cd "$ROOT" && pwd)" >> "$GITHUB_ENV"
+
+      - name: Configure and test core including waterfall
+        shell: bash
+        run: |
+          cmake -S "$RT60_ROOT" -B rt60-build-core -G Xcode \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+          cmake --build rt60-build-core --config Release
+          ctest --test-dir rt60-build-core -C Release --output-on-failure
+
+      - name: Configure Standalone and VST3
+        shell: bash
+        run: |
+          cmake -S "$RT60_ROOT" -B rt60-build -G Xcode -DRT60_BUILD_JUCE=ON \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+
+      - name: Build Standalone and VST3
+        shell: bash
+        run: cmake --build rt60-build --config Release
+
+      - name: Collect Intel artifacts
+        shell: bash
+        run: |
+          mkdir -p artifact
+          APP=$(find rt60-build -type d -name 'RT60 Room Decay Corrector.app' -print -quit)
+          VST=$(find rt60-build -type d -name '*.vst3' -print -quit)
+          test -n "$APP" || { echo 'Standalone APP not found.' >&2; exit 1; }
+          test -n "$VST" || { echo 'VST3 bundle not found.' >&2; exit 1; }
+          cp -R "$APP" artifact/
+          cp -R "$VST" artifact/
+          ditto -c -k --sequesterRsrc --keepParent artifact RT60-Room-Decay-Corrector-v0.6-macOS-Intel.zip
+
+      - name: Upload Intel package
+        uses: actions/upload-artifact@v4
+        with:
+          name: RT60-Room-Decay-Corrector-v0.6-macOS-Intel
+          path: RT60-Room-Decay-Corrector-v0.6-macOS-Intel.zip
+          if-no-files-found: error
+          retention-days: 30
