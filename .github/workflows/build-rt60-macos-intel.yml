@@ -1,0 +1,135 @@
+name: Build RT60 Room Decay Corrector macOS Intel 10.13+
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-13
+    steps:
+      - name: Checkout build host
+        uses: actions/checkout@v4
+
+      - name: Locate RT60 source ZIP
+        shell: bash
+        run: |
+          ZIP=$(find . -name 'RT60-Room-Decay-Corrector-v0.2-source.zip' -print -quit)
+          if [ -z "$ZIP" ]; then
+            echo 'RT60 source ZIP not found.' >&2
+            exit 1
+          fi
+          echo "RT60_ZIP=$(cd "$(dirname "$ZIP")" && pwd)/$(basename "$ZIP")" >> "$GITHUB_ENV"
+
+      - name: Expand source
+        shell: bash
+        run: |
+          mkdir -p rt60-src
+          unzip -q "$RT60_ZIP" -d rt60-src
+          ROOT=$(find rt60-src -mindepth 1 -maxdepth 1 -type d -print -quit)
+          if [ -z "$ROOT" ]; then
+            echo 'Source root not found.' >&2
+            exit 1
+          fi
+          echo "RT60_ROOT=$(cd "$ROOT" && pwd)" >> "$GITHUB_ENV"
+
+      - name: Patch JUCE VST3 compatibility
+        shell: bash
+        run: |
+          CMAKE_FILE="$RT60_ROOT/CMakeLists.txt"
+          if ! grep -q 'JUCE_VST3_CAN_REPLACE_VST2' "$CMAKE_FILE"; then
+            python3 - "$CMAKE_FILE" <<'PY'
+          import pathlib, sys
+          p = pathlib.Path(sys.argv[1])
+          s = p.read_text()
+          s = s.replace('if(RT60_BUILD_JUCE)\n',
+                        'if(RT60_BUILD_JUCE)\n    add_compile_definitions(JUCE_VST3_CAN_REPLACE_VST2=0)\n',
+                        1)
+          p.write_text(s)
+          PY
+          fi
+
+      - name: Configure core tests
+        shell: bash
+        run: >
+          cmake -S "$RT60_ROOT" -B rt60-build-core -G Xcode
+          -DCMAKE_OSX_ARCHITECTURES=x86_64
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+
+      - name: Build core tests
+        shell: bash
+        run: cmake --build rt60-build-core --config Release
+
+      - name: Run core and measurement tests
+        shell: bash
+        run: ctest --test-dir rt60-build-core -C Release --output-on-failure
+
+      - name: Configure Standalone and VST3
+        shell: bash
+        run: >
+          cmake -S "$RT60_ROOT" -B rt60-build -G Xcode
+          -DRT60_BUILD_JUCE=ON
+          -DCMAKE_OSX_ARCHITECTURES=x86_64
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+
+      - name: Build Standalone and VST3
+        shell: bash
+        run: cmake --build rt60-build --config Release
+
+      - name: Collect and verify Intel artifacts
+        shell: bash
+        run: |
+          mkdir -p artifact
+          APP=$(find rt60-build -type d -name 'RT60 Room Decay Corrector.app' -print -quit)
+          VST=$(find rt60-build -type d -name '*.vst3' -print -quit)
+
+          if [ -z "$APP" ]; then
+            echo 'Standalone APP not found.' >&2
+            exit 1
+          fi
+
+          if [ -z "$VST" ]; then
+            echo 'VST3 bundle not found.' >&2
+            exit 1
+          fi
+
+          cp -R "$APP" artifact/
+          cp -R "$VST" artifact/
+
+          APP_BIN=$(find "$APP/Contents/MacOS" -maxdepth 1 -type f -print -quit)
+          VST_BIN=$(find "$VST/Contents/MacOS" -maxdepth 1 -type f -print -quit)
+
+          echo "Standalone architecture: $(lipo -archs "$APP_BIN")"
+          echo "VST3 architecture: $(lipo -archs "$VST_BIN")"
+
+          lipo -archs "$APP_BIN" | grep -q x86_64
+          lipo -archs "$VST_BIN" | grep -q x86_64
+
+      - name: Ad-hoc sign app and VST3
+        shell: bash
+        run: |
+          APP=$(find artifact -type d -name 'RT60 Room Decay Corrector.app' -print -quit)
+          VST=$(find artifact -type d -name '*.vst3' -print -quit)
+
+          codesign --force --deep --sign - "$APP"
+          codesign --force --deep --sign - "$VST"
+
+          codesign --verify --deep --strict "$APP"
+          codesign --verify --deep --strict "$VST"
+
+      - name: Package macOS Intel build
+        shell: bash
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent artifact RT60-Room-Decay-Corrector-v0.2-macOS-Intel-10.13+.zip
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: RT60-Room-Decay-Corrector-v0.2-macOS-Intel-10.13+
+          path: RT60-Room-Decay-Corrector-v0.2-macOS-Intel-10.13+.zip
+          if-no-files-found: error
+          retention-days: 30
