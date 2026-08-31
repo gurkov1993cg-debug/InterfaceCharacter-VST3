@@ -1,0 +1,32 @@
+name: Windows Standalone and VST3
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build -A x64 -DRT60_BUILD_JUCE=ON
+      - name: Build
+        shell: pwsh
+        run: cmake --build build --config Release
+      - name: Core tests
+        shell: pwsh
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Collect
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifact | Out-Null
+          Get-ChildItem build -Recurse -Filter "RT60 Room Decay Corrector.exe" | Copy-Item -Destination artifact
+          Get-ChildItem build -Recurse -Directory -Filter "*.vst3" | Copy-Item -Destination artifact -Recurse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RT60-Room-Decay-Corrector-Windows
+          path: artifact
+          if-no-files-found: error
