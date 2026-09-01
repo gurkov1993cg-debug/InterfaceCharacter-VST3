@@ -1,0 +1,29 @@
+name: Export RT60 v0.12 source
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/export-rt60-v012-source.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unpack source
+        run: |
+          set -e
+          rm -rf src
+          mkdir src
+          unzip -q RT60-Room-Decay-Corrector-v0.12-source-ASIOFIX.zip -d src
+          find src -maxdepth 4 -type f | sort
+      - name: Upload unpacked source
+        uses: actions/upload-artifact@v4
+        with:
+          name: RT60-v012-unpacked-source
+          path: src
+          retention-days: 1
