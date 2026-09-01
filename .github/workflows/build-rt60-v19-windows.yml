@@ -1,0 +1,160 @@
+name: Build RT60 Room Decay Corrector v19 Windows
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'RT60-Room-Decay-Corrector-v19-source.zip'
+      - '.github/workflows/build-rt60-v19-windows.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate v19 source ZIP
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path . -Filter 'RT60-Room-Decay-Corrector-v19-source.zip' -Recurse | Select-Object -First 1
+          if (-not $zip) { throw 'v19 source ZIP not found' }
+          "RT60_ZIP=$($zip.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Expand source
+        shell: pwsh
+        run: |
+          Remove-Item rt60-src -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path rt60-src | Out-Null
+          Expand-Archive -Path $env:RT60_ZIP -DestinationPath rt60-src -Force
+          $root = Get-ChildItem rt60-src -Directory | Select-Object -First 1
+          if (-not $root) { throw 'Source root not found' }
+          "RT60_ROOT=$($root.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Audit v19 dashboard and real actions
+        shell: pwsh
+        run: |
+          $cpp = Get-Content "$env:RT60_ROOT/src/standalone/MainComponent.cpp" -Raw
+          $hpp = Get-Content "$env:RT60_ROOT/src/standalone/MainComponent.hpp" -Raw
+          $main = Get-Content "$env:RT60_ROOT/src/standalone/Main.cpp" -Raw
+          $plugin = Get-Content "$env:RT60_ROOT/src/plugin/PluginEditor.cpp" -Raw
+          $processor = Get-Content "$env:RT60_ROOT/src/plugin/PluginProcessor.cpp" -Raw
+          $bundle = Get-Content "$env:RT60_ROOT/src/core/ProfileBundle.cpp" -Raw
+          $cmake = Get-Content "$env:RT60_ROOT/CMakeLists.txt" -Raw
+
+          $standaloneActions = @(
+            'newMeasurementButton_.onClick',
+            'measureButton_.onClick',
+            'autoCorrectButton_.onClick',
+            'saveProfileButton_.onClick',
+            'loadProfileButton_.onClick',
+            'startNewMeasurementSession()',
+            'startMeasurement(false)',
+            'startAutoCorrection()',
+            'beginSaveProfileAs()',
+            'beginLoadProfile()'
+          )
+          foreach ($token in $standaloneActions) {
+            if (-not $cpp.Contains($token)) { throw "Missing real standalone action: $token" }
+          }
+
+          $dashboard = @(
+            'setSize(1536, 1024)',
+            'waterfallAfterGraph_',
+            'correctionCurveGraph_',
+            'WORST FREQUENCY',
+            'IMPROVEMENT',
+            'PROFESSIONAL EDITION',
+            'audioTypeSelector_',
+            'audioDeviceSelector_',
+            'sampleRateSelector_',
+            'bufferSizeSelector_'
+          )
+          foreach ($token in $dashboard) {
+            if (-not $cpp.Contains($token) -and -not $hpp.Contains($token)) { throw "Missing approved-dashboard element: $token" }
+          }
+
+          if ($hpp.Contains('demoButton_') -or $cpp.Contains('LOAD DEMO') -or $cpp.Contains('RE-MEASURE L + R')) {
+            throw 'Obsolete workflow control remains'
+          }
+          if (-not $plugin.Contains('loadProfileButton_.onClick') -or -not $processor.Contains('loadProfileBundleFromFile')) {
+            throw 'VST3 LOAD PROFILE is not wired'
+          }
+          if (-not $processor.Contains('RT60_STATE') -or -not $processor.Contains('PROFILE_BUNDLE') -or -not $processor.Contains('Base64::toBase64')) {
+            throw 'VST3 project-state profile embedding is missing'
+          }
+          if (-not $bundle.Contains('RT60_PROFILE_BUNDLE 4') -or -not $bundle.Contains('CHECKSUM ')) {
+            throw 'Profile v4 checksum format is missing'
+          }
+          if (-not $cpp.Contains('replaceWithData') -or -not $cpp.Contains('activeMirrorRoundTrip')) {
+            throw 'Exact-byte profile write/readback validation is missing'
+          }
+          if (-not $cmake.Contains('VERSION 19.0.0') -or -not $main.Contains('19.0.0')) {
+            throw 'v19 version metadata is inconsistent'
+          }
+          if (-not $cpp.Contains('micTestButton_.onClick') -or -not $cpp.Contains('startMicTest()') -or -not $cpp.Contains('addAndMakeVisible(inputLevelMeter_)')) {
+            throw 'v19 live microphone meter/TEST MIC regression'
+          }
+          if ($cpp.Contains('startTimerHz(20)')) { throw 'Old 20 Hz UI timer remains' }
+          $timerStart = $cpp.IndexOf('void MainComponent::timerCallback()')
+          $timerEnd = $cpp.IndexOf('void MainComponent::finishMeasurementOnMessageThread()', $timerStart)
+          if ($timerStart -lt 0 -or $timerEnd -le $timerStart) { throw 'Could not audit timer callback' }
+          $timerBlock = $cpp.Substring($timerStart, $timerEnd - $timerStart)
+          if ($timerBlock.Contains('repaint();')) { throw 'Expensive full repaint remains inside timer callback' }
+          $waterfall = Get-Content "$env:RT60_ROOT/src/core/WaterfallData.cpp" -Raw
+          if (-not $waterfall.Contains('RT60_WATERFALL 2') -or -not $waterfall.Contains('relativeLevelOffsetDb')) {
+            throw 'v19 BEFORE/AFTER shared-reference waterfall fix is missing'
+          }
+          Write-Host 'v19 dashboard/action/profile audit passed.'
+
+      - name: Core configure
+        shell: pwsh
+        run: cmake -S "$env:RT60_ROOT" -B rt60-core -A x64
+
+      - name: Core build
+        shell: pwsh
+        run: cmake --build rt60-core --config Release
+
+      - name: Core tests including exact profile file I/O
+        shell: pwsh
+        run: |
+          ctest --test-dir rt60-core -C Release --output-on-failure
+          ctest --test-dir rt60-core -C Release -R rt60_profile_file_io_tests --output-on-failure
+
+      - name: Configure Standalone and VST3
+        shell: pwsh
+        run: cmake -S "$env:RT60_ROOT" -B rt60-build -A x64 -DRT60_BUILD_JUCE=ON
+
+      - name: Build Standalone and VST3
+        shell: pwsh
+        run: cmake --build rt60-build --config Release
+
+      - name: Verify package contents
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem rt60-build -Recurse -File -Filter 'RT60 Room Decay Corrector.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'Standalone EXE not found' }
+          $vst = Get-ChildItem rt60-build -Recurse -Directory -Filter '*.vst3' | Select-Object -First 1
+          if (-not $vst) { throw 'VST3 bundle not found' }
+          "RT60_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RT60_VST=$($vst.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Collect package
+        shell: pwsh
+        run: |
+          Remove-Item artifact -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path artifact | Out-Null
+          Copy-Item $env:RT60_EXE artifact/
+          Copy-Item $env:RT60_VST artifact/ -Recurse
+          Compress-Archive -Path artifact/* -DestinationPath RT60-Room-Decay-Corrector-v19-Windows-x64.zip
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: RT60-Room-Decay-Corrector-v19-Windows-x64
+          path: RT60-Room-Decay-Corrector-v19-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
