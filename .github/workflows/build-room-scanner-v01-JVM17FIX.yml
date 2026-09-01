@@ -1,0 +1,54 @@
+name: RT60 Room Scanner v0.1 Android
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'RT60-Room-Scanner-v0.1-source-JVM17FIX.zip'
+      - '.github/workflows/build-room-scanner-v01-JVM17FIX.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate scanner ZIP
+        id: locate
+        shell: bash
+        run: |
+          set -e
+          ZIP='RT60-Room-Scanner-v0.1-source-JVM17FIX.zip'
+          test -f "$ZIP" || { find . -maxdepth 2 -type f | sort; exit 1; }
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Unpack scanner
+        shell: bash
+        run: |
+          rm -rf room-scanner-src
+          mkdir room-scanner-src
+          unzip -q '${{ steps.locate.outputs.zip }}' -d room-scanner-src
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Build debug APK
+        working-directory: room-scanner-src
+        run: gradle :app:assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RT60-Room-Scanner-v0.1-JVM17FIX-Android-debug
+          path: room-scanner-src/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
