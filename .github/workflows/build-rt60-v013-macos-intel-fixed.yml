@@ -1,0 +1,95 @@
+name: Build RT60 Room Decay Corrector v0.13 macOS Intel CoreAudio FIXED
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'RT60-Room-Decay-Corrector-v0.13-source.zip'
+      - '.github/workflows/build-rt60-v013-macos-intel-fixed.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate source ZIP
+        shell: bash
+        run: |
+          ZIP=$(find . -name 'RT60-Room-Decay-Corrector-v0.13-source.zip' -print -quit)
+          test -n "$ZIP" || { echo 'v0.13 source ZIP not found.' >&2; exit 1; }
+          echo "RT60_ZIP=$(cd "$(dirname "$ZIP")" && pwd)/$(basename "$ZIP")" >> "$GITHUB_ENV"
+
+      - name: Expand source
+        shell: bash
+        run: |
+          rm -rf rt60-src && mkdir -p rt60-src
+          unzip -q "$RT60_ZIP" -d rt60-src
+          ROOT=$(find rt60-src -mindepth 1 -maxdepth 1 -type d -print -quit)
+          test -n "$ROOT" || { echo 'Source root not found.' >&2; exit 1; }
+          echo "RT60_ROOT=$(cd "$ROOT" && pwd)" >> "$GITHUB_ENV"
+
+      - name: Configure core Intel
+        shell: bash
+        run: |
+          cmake -S "$RT60_ROOT" -B rt60-build-core -G Xcode \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+
+      - name: Build core
+        shell: bash
+        run: cmake --build rt60-build-core --config Release
+
+      - name: Run core tests
+        shell: bash
+        run: ctest --test-dir rt60-build-core -C Release --output-on-failure
+
+      - name: Configure Standalone and VST3 CoreAudio Intel
+        shell: bash
+        run: |
+          cmake -S "$RT60_ROOT" -B rt60-build -G Xcode -DRT60_BUILD_JUCE=ON \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+
+      - name: Build Standalone and VST3
+        shell: bash
+        run: cmake --build rt60-build --config Release
+
+      - name: Verify Intel binaries
+        shell: bash
+        run: |
+          APP=$(find rt60-build -type d -name 'RT60 Room Decay Corrector.app' -print -quit)
+          test -n "$APP" || { echo 'Standalone APP not found.' >&2; exit 1; }
+          BIN="$APP/Contents/MacOS/RT60 Room Decay Corrector"
+          test -f "$BIN" || { echo 'Standalone binary not found.' >&2; exit 1; }
+          file "$BIN"
+          file "$BIN" | grep -q 'x86_64' || { echo 'Standalone is not Intel x86_64.' >&2; exit 1; }
+
+          VST=$(find rt60-build -type d -name '*.vst3' -print -quit)
+          test -n "$VST" || { echo 'VST3 bundle not found.' >&2; exit 1; }
+          VSTBIN=$(find "$VST/Contents/MacOS" -type f -maxdepth 1 -print -quit)
+          test -n "$VSTBIN" || { echo 'VST3 binary not found.' >&2; exit 1; }
+          file "$VSTBIN"
+          file "$VSTBIN" | grep -q 'x86_64' || { echo 'VST3 is not Intel x86_64.' >&2; exit 1; }
+
+      - name: Collect Intel artifacts
+        shell: bash
+        run: |
+          rm -rf artifact && mkdir -p artifact
+          APP=$(find rt60-build -type d -name 'RT60 Room Decay Corrector.app' -print -quit)
+          VST=$(find rt60-build -type d -name '*.vst3' -print -quit)
+          cp -R "$APP" artifact/
+          cp -R "$VST" artifact/
+          ditto -c -k --sequesterRsrc --keepParent artifact RT60-Room-Decay-Corrector-v0.13-macOS-Intel.zip
+
+      - name: Upload Intel package
+        uses: actions/upload-artifact@v4
+        with:
+          name: RT60-Room-Decay-Corrector-v0.13-macOS-Intel
+          path: RT60-Room-Decay-Corrector-v0.13-macOS-Intel.zip
+          if-no-files-found: error
+          retention-days: 30
